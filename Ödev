@@ -1,0 +1,157 @@
+# Bu kodun çalışabilmesi için bu kütüphanlerin yüklü olması lazım "pip install numpy scipy sounddevice"
+
+import tkinter as tk
+from tkinter import messagebox
+import numpy as np
+import sounddevice as sd
+from scipy.io import wavfile
+from scipy.fft import fft, fftfreq
+from scipy.signal import get_window
+import os
+
+# --- 1. FREKANS VE KARAKTER TANIMLAMALARI ---
+karakterler = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ " # Toplam 30 karakter [cite: 35]
+
+# 5 Düşük, 6 Yüksek frekans (5x6=30)
+f_low_list = [697, 770, 852, 941, 1046]
+f_high_list = [1209, 1336, 1477, 1633, 1800, 2000]
+
+karakter_frekans_haritasi = {}
+frekans_karakter_haritasi = {}
+
+idx = 0
+for fl in f_low_list:
+    for fh in f_high_list:
+        if idx < len(karakterler):
+            harf = karakterler[idx]
+            karakter_frekans_haritasi[harf] = (fl, fh)
+            frekans_karakter_haritasi[(fl, fh)] = harf
+            idx += 1
+
+# --- AYARLAR ---
+fs = 8000  # Örnekleme hızı [cite: 58]
+sure = 0.04 # Her karakter için süre (40 ms) 
+t = np.arange(0, sure, 1/fs) 
+dosya_adi = "dtmf_ses.wav"
+
+# --- 2. FONKSİYONLAR ---
+def metni_sese_cevir():
+    metin = txt_giris.get("1.0", tk.END).strip().upper()
+    if not metin:
+        messagebox.showwarning("Uyarı", "Lütfen dönüştürülecek metni girin!")
+        return
+
+    ses_sinyali = np.array([])
+    
+    for harf in metin:
+        if harf in karakter_frekans_haritasi:
+            f1, f2 = karakter_frekans_haritasi[harf]
+            # s(t) = sin(2πf1t) + sin(2πf2t) [cite: 41]
+            s_t = np.sin(2 * np.pi * f1 * t) + np.sin(2 * np.pi * f2 * t)
+            ses_sinyali = np.concatenate((ses_sinyali, s_t))
+            
+    if len(ses_sinyali) > 0:
+        # Sesi normalize edip 16-bit formatına getir 
+        ses_sinyali_norm = np.int16((ses_sinyali / np.max(np.abs(ses_sinyali))) * 32767)
+        wavfile.write(dosya_adi, fs, ses_sinyali_norm)
+        
+        # Sesi Çal
+        sd.play(ses_sinyali_norm, fs)
+        sd.wait()
+        
+        lbl_durum.config(text=f"Durum: Başarılı! '{dosya_adi}' kaydedildi ve çalındı.", fg="green")
+    else:
+        messagebox.showerror("Hata", "Geçerli karakter bulunamadı!")
+
+def en_yakin_frekansi_bul(hedef_f, frekans_listesi):
+    return min(frekans_listesi, key=lambda x: abs(x - hedef_f))
+
+def sesi_metne_cevir():
+    if not os.path.exists(dosya_adi):
+        messagebox.showerror("Hata", f"Önce ses üretmelisiniz! '{dosya_adi}' bulunamadı.")
+        return
+
+    ornekleme_hizi, ses_verisi = wavfile.read(dosya_adi)
+    pencere_boyutu = int(ornekleme_hizi * sure)
+    
+    cozulen_metin = ""
+    onceki_harf = None
+    
+    # Zaman pencerelerine ayırma ve FFT [cite: 46, 54]
+    for i in range(0, len(ses_verisi), pencere_boyutu):
+        pencere = ses_verisi[i:i + pencere_boyutu]
+        
+        if len(pencere) < pencere_boyutu:
+            break
+            
+        # Gürültü ve sessizlik eşiği 
+        if np.max(np.abs(pencere)) < 1000:
+            onceki_harf = None
+            continue
+            
+        # Hamming pencereleme 
+        hamming_penceresi = get_window('hamming', len(pencere))
+        pencere_islenmis = pencere * hamming_penceresi
+        
+        N = len(pencere_islenmis)
+        yf = fft(pencere_islenmis)
+        xf = fftfreq(N, 1 / ornekleme_hizi)
+        
+        pozitif_frekanslar = xf[:N//2]
+        genlikler = np.abs(yf[:N//2])
+        
+        # En baskın 2 frekansı bul [cite: 55]
+        tepe_indeksleri = np.argsort(genlikler)[-2:]
+        tespit_edilen_frekanslar = pozitif_frekanslar[tepe_indeksleri]
+        
+        f1_tespit = min(tespit_edilen_frekanslar)
+        f2_tespit = max(tespit_edilen_frekanslar)
+        
+        f1_yaklasik = en_yakin_frekansi_bul(f1_tespit, f_low_list)
+        f2_yaklasik = en_yakin_frekansi_bul(f2_tespit, f_high_list)
+        
+        if (f1_yaklasik, f2_yaklasik) in frekans_karakter_haritasi:
+            bulunan_harf = frekans_karakter_haritasi[(f1_yaklasik, f2_yaklasik)]
+            
+            # Debouncing: Karakter değişene kadar yeni harf yazma 
+            if bulunan_harf != onceki_harf:
+                cozulen_metin += bulunan_harf
+                onceki_harf = bulunan_harf
+
+    txt_cikis.delete("1.0", tk.END)
+    txt_cikis.insert(tk.END, cozulen_metin)
+    lbl_durum.config(text="Durum: Çözümleme Tamamlandı.", fg="blue")
+
+# --- 3. GUI TASARIMI (Tkinter) ---
+pencere = tk.Tk()
+pencere.title("DTMF Sinyal Kodlayıcı ve Çözücü")
+pencere.geometry("500x450")
+pencere.configure(padx=20, pady=20)
+
+# Başlık
+tk.Label(pencere, text="DTMF Uygulaması (Metin <-> Ses)", font=("Arial", 14, "bold")).pack(pady=10)
+
+# Giriş Alanı
+tk.Label(pencere, text="Sese Çevrilecek Metni Girin:").pack(anchor="w")
+txt_giris = tk.Text(pencere, height=4, width=50)
+txt_giris.pack(pady=5)
+
+# Kodlama Butonu
+btn_kodla = tk.Button(pencere, text="Ses Üret ve Çal (Encoding)", bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), command=metni_sese_cevir)
+btn_kodla.pack(pady=10)
+
+# Çıkış Alanı
+tk.Label(pencere, text="Çözümlenen Metin (Decoding):").pack(anchor="w", pady=(15, 0))
+txt_cikis = tk.Text(pencere, height=4, width=50)
+txt_cikis.pack(pady=5)
+
+# Çözümleme Butonu
+btn_coz = tk.Button(pencere, text="Sesten Metne Çevir (Decoding)", bg="#2196F3", fg="white", font=("Arial", 10, "bold"), command=sesi_metne_cevir)
+btn_coz.pack(pady=10)
+
+# Durum Bilgisi
+lbl_durum = tk.Label(pencere, text="Durum: Bekleniyor...", font=("Arial", 9, "italic"), fg="gray")
+lbl_durum.pack(pady=10)
+
+# Arayüzü Başlat
+pencere.mainloop()
