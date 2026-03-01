@@ -10,7 +10,7 @@ from scipy.signal import get_window
 import os
 
 # --- 1. FREKANS VE KARAKTER TANIMLAMALARI ---
-karakterler = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ " # Toplam 30 karakter [cite: 35]
+karakterler = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ " # Toplam 30 karakter
 
 # 5 Düşük, 6 Yüksek frekans (5x6=30)
 f_low_list = [697, 770, 852, 941, 1046]
@@ -29,8 +29,8 @@ for fl in f_low_list:
             idx += 1
 
 # --- AYARLAR ---
-fs = 8000  # Örnekleme hızı [cite: 58]
-sure = 0.04 # Her karakter için süre (40 ms) 
+fs = 8000  # Örnekleme hızı
+sure = 0.04 # Her karakter için süre (40 ms)
 t = np.arange(0, sure, 1/fs) 
 dosya_adi = "dtmf_ses.wav"
 
@@ -42,16 +42,20 @@ def metni_sese_cevir():
         return
 
     ses_sinyali = np.array([])
+    # Her harf arasına eklenecek sessizlik süresi (Pencere boyutuyla aynı, 40ms)
+    sessizlik = np.zeros(int(fs * sure)) 
     
     for harf in metin:
         if harf in karakter_frekans_haritasi:
             f1, f2 = karakter_frekans_haritasi[harf]
-            # s(t) = sin(2πf1t) + sin(2πf2t) [cite: 41]
+            # s(t) = sin(2πf1t) + sin(2πf2t)
             s_t = np.sin(2 * np.pi * f1 * t) + np.sin(2 * np.pi * f2 * t)
-            ses_sinyali = np.concatenate((ses_sinyali, s_t))
+            
+            # Sesi ve hemen ardından sessizliği ekleyerek birleştir
+            ses_sinyali = np.concatenate((ses_sinyali, s_t, sessizlik))
             
     if len(ses_sinyali) > 0:
-        # Sesi normalize edip 16-bit formatına getir 
+        # Sesi normalize edip 16-bit formatına getir
         ses_sinyali_norm = np.int16((ses_sinyali / np.max(np.abs(ses_sinyali))) * 32767)
         wavfile.write(dosya_adi, fs, ses_sinyali_norm)
         
@@ -77,19 +81,19 @@ def sesi_metne_cevir():
     cozulen_metin = ""
     onceki_harf = None
     
-    # Zaman pencerelerine ayırma ve FFT [cite: 46, 54]
+    # Zaman pencerelerine ayırma ve FFT
     for i in range(0, len(ses_verisi), pencere_boyutu):
         pencere = ses_verisi[i:i + pencere_boyutu]
         
         if len(pencere) < pencere_boyutu:
             break
             
-        # Gürültü ve sessizlik eşiği 
+        # Gürültü ve sessizlik eşiği: Sinyal zayıfsa (sessizlik boşluğundaysa) hafızayı sıfırla
         if np.max(np.abs(pencere)) < 1000:
             onceki_harf = None
             continue
             
-        # Hamming pencereleme 
+        # Hamming pencereleme
         hamming_penceresi = get_window('hamming', len(pencere))
         pencere_islenmis = pencere * hamming_penceresi
         
@@ -100,7 +104,7 @@ def sesi_metne_cevir():
         pozitif_frekanslar = xf[:N//2]
         genlikler = np.abs(yf[:N//2])
         
-        # En baskın 2 frekansı bul [cite: 55]
+        # En baskın 2 frekansı bul
         tepe_indeksleri = np.argsort(genlikler)[-2:]
         tespit_edilen_frekanslar = pozitif_frekanslar[tepe_indeksleri]
         
@@ -113,7 +117,10 @@ def sesi_metne_cevir():
         if (f1_yaklasik, f2_yaklasik) in frekans_karakter_haritasi:
             bulunan_harf = frekans_karakter_haritasi[(f1_yaklasik, f2_yaklasik)]
             
-            
+            # Debouncing: Karakter değişene kadar yeni harf yazma
+            if bulunan_harf != onceki_harf:
+                cozulen_metin += bulunan_harf
+                onceki_harf = bulunan_harf
 
     txt_cikis.delete("1.0", tk.END)
     txt_cikis.insert(tk.END, cozulen_metin)
