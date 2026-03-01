@@ -113,10 +113,7 @@ def sesi_metne_cevir():
         if (f1_yaklasik, f2_yaklasik) in frekans_karakter_haritasi:
             bulunan_harf = frekans_karakter_haritasi[(f1_yaklasik, f2_yaklasik)]
             
-            # Debouncing: Karakter değişene kadar yeni harf yazma 
-            if bulunan_harf != onceki_harf:
-                cozulen_metin += bulunan_harf
-                onceki_harf = bulunan_harf
+            
 
     txt_cikis.delete("1.0", tk.END)
     txt_cikis.insert(tk.END, cozulen_metin)
